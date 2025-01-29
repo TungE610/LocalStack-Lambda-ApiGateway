@@ -1,0 +1,117 @@
+volumes:
+  team_product_mysql_data:
+    driver: local
+  team_product_node_modules:
+    driver: 'local'
+  team_product_output:
+    driver: 'local'
+
+networks:
+  team_product_local:
+    name: team_product_local
+    ipam:
+      driver: default
+      config:
+        - subnet: "192.168.230.0/24"
+
+services:
+  #API
+  team-product_server:
+    container_name: team_product_server
+    build:
+      context: ../
+      dockerfile: server/Dockerfile
+      target: runtime
+    volumes:
+      - $PWD/../server:/var/www/team_product
+    depends_on:
+      team_product_mysql:
+        condition: service_healthy
+    networks:
+      - team_product_local
+    ports:
+      - "2025:2025"
+    working_dir: /var/www/team_product
+    entrypoint: air -c .air.toml
+    env_file:
+      - .env
+  
+  #front
+  team_product_front:
+    container_name: team_product_front
+    build:
+      context: ../
+      dockerfile: front/Dockerfile
+      target: runtime
+    volumes:
+      - $PWD/../front:/var/www/team-product/front
+      - team_product_node_modules:/var/www/team-product/front/node_modules
+      - team_product_output:/front/.output
+    networks:
+      - team_product_local
+    ports:
+      - 3000:3000
+    working_dir: /var/www/team-product/front
+    entrypoint: npm run dev --host 
+
+  # MySQL
+  team_product_mysql:
+    container_name: team_product_mysql
+    image: mysql:8.0.36
+    ports:
+      - "3324:3324"
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_ROOT_HOST=%
+      - MYSQL_DATABASE=team_product
+    volumes:
+      - $PWD/mysql/my.cnf:/etc/my.cnf
+      - $PWD/mysql/conf:/etc/mysql/conf.d
+      - $PWD/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - $PWD/log:/var/log/mysql
+      - team_product_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "-uroot", "-proot", "-h127.0.0.1", "-P3324", "ping"]
+      interval: 3s
+      timeout: 1s
+      retries: 3
+    networks:
+      - team_product_local
+    
+    # Migrate
+  team_product_migrate:
+    container_name: team_product_migrate
+    build:
+      context: ../migrate
+      dockerfile: Dockerfile
+    volumes:
+      - $PWD/../conf:/conf
+      - $PWD/../migrate/sqls:/migrate/sqls
+    depends_on:
+      - team_product_mysql
+    networks:
+      - team_product_local
+    
+    # Seed
+  team_product_seeder:
+    container_name: team_product_seeder
+    build:
+      context: ../
+      dockerfile: seeder/Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      - team_product_mysql
+    networks:
+      - team_product_local
+  localstack:
+    image: localstack/localstack
+    environment:
+      - SERVICES=ecs,iam,cloudwatch,logs,events,s3,ses,lambda, sns,apigateway
+      - DEFAULT_REGION=us-east-1
+    ports:
+      - "4566:4566"  # LocalStack API Gateway
+      - "4510-4559:4510-4559"  # ECS Ports (if needed)
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./localstack:/localstack_data"
